@@ -48,9 +48,10 @@ def load_opportunity_data(folder_path):
     data = pd.concat(df_list, ignore_index=True)
     return data
 
+
 #############################################
 # 2. Data Preprocessing & Feature Engineering
-#############################################
+#############################################  
 def preprocess_opportunity_data(df):
     """
     Fills NA, computes acceleration/gyroscope magnitude, standard scales features, and rearranges columns.
@@ -329,13 +330,3 @@ def classification_collate_fn(batch):
 
 
 
-
-
-def load_subject_windows(subject_folder, **window_args):
-    df = load_opportunity_data(subject_folder)
-    df = preprocess_opportunity_data(df)
-    unique_sorted = np.sort(df['ML_Both_Arms'].unique())
-    mapping = {old: new for new, old in enumerate(unique_sorted)}
-    df['ML_Both_Arms'] = df['ML_Both_Arms'].map(mapping)
-    windows, labels = create_adaptive_windows_expansion(df, **window_args)
-    return windows, labels

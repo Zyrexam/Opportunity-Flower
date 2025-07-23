@@ -21,18 +21,6 @@ from opportunity_tcn.dataset import (
     classification_collate_fn
 )
 
-# --------- DATA PARTITIONING ----------
-def partition_data(windows, labels, num_clients, random_seed=42):
-    idxs = np.arange(len(windows))
-    skf = StratifiedKFold(n_splits=num_clients, shuffle=True, random_state=random_seed)
-    folds = []
-    for _, test_idx in skf.split(idxs, labels):
-        client_windows = [windows[i] for i in test_idx]
-        client_labels = [labels[i] for i in test_idx]
-        folds.append((client_windows, client_labels))
-    return folds
-
-
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super().__init__()
@@ -45,7 +33,7 @@ class PositionalEncoding(nn.Module):
         pe = pe.unsqueeze(0)
         self.register_buffer('pe', pe)
     def forward(self, x):
-        x = x + self.pe[:, :x.size(1)]
+        x = x + self.pe[:, :x.size(1), :] 
         return self.dropout(x)
 
 def masked_mean_pooling(x, lengths):
@@ -253,36 +241,6 @@ def split_datasets(windows, labels, train_ratio=0.1, finetune_ratio=0.9, test_ra
 
 
 
-def load_and_preprocess_data(
-    folder_path,
-    initial_window_size=50,
-    W_min=10,
-    W_max=100,
-    shift=10
-):
-    print("Loading Opportunity data from folder...")
-    raw_df = load_opportunity_data(folder_path)
-    print("Shape after loading:", raw_df.shape)
-
-    print("Preprocessing and feature engineering...")
-    proc_df = preprocess_opportunity_data(raw_df)
-    unique_sorted = np.sort(proc_df['ML_Both_Arms'].unique())
-    mapping = {old: new for new, old in enumerate(unique_sorted)}
-    proc_df['ML_Both_Arms'] = proc_df['ML_Both_Arms'].map(mapping)
-    print("Unique labels after remapping:", np.sort(proc_df['ML_Both_Arms'].unique()))
-    print("Shape after preprocessing:", proc_df.shape)
-
-    print("Creating adaptive windows...")
-    windows, labels = create_adaptive_windows_expansion(
-        proc_df, initial_window_size=initial_window_size,
-        W_min=W_min, W_max=W_max,
-        expand_step=10, contract_step=10,
-        threshold_factor=0.25, shift=shift
-    )
-    print(f"Total windows created: {len(windows)}")
-    return windows, labels
-
-
 def build_models(
     num_classes=4, fusion_method='gated', group_indices=None,
     conv_channels=16, hidden_dim=64, num_layers=4, kernel_size=3, dropout=0.1
@@ -407,3 +365,86 @@ def visualize_tsne(encoder, dataloader, device='cpu'):
     plt.legend(*scatter.legend_elements(), title="Classes")
     plt.title("t-SNE of Encoder Representations (Supervised Fine-tuning)")
     plt.show()
+
+
+
+
+
+
+def load_and_preprocess_data(
+    folder_path,
+    initial_window_size=50,
+    W_min=10,
+    W_max=100,
+    shift=10
+):
+    raw_df = load_opportunity_data(folder_path)
+    proc_df = preprocess_opportunity_data(raw_df)
+    unique_sorted = np.sort(proc_df['ML_Both_Arms'].unique())
+    mapping = {old: new for new, old in enumerate(unique_sorted)}
+    proc_df['ML_Both_Arms'] = proc_df['ML_Both_Arms'].map(mapping)
+    print("Unique labels after remapping:", np.sort(proc_df['ML_Both_Arms'].unique()))
+    print("Shape after preprocessing:", proc_df.shape)
+
+    print("Creating adaptive windows...")
+    
+    windows, labels = create_adaptive_windows_expansion(
+        proc_df, initial_window_size=initial_window_size,
+        W_min=W_min, W_max=W_max,
+        expand_step=10, contract_step=10,
+        threshold_factor=0.25, shift=shift
+    )
+    print(f"Total windows created: {len(windows)}")
+    return windows, labels
+
+def load_client_data(
+    client_folder,
+    initial_window_size=50,
+    W_min=10,
+    W_max=100,
+    shift=10,
+    train_ratio=0.1,
+    finetune_ratio=0.9,
+    test_ratio=0.1,
+    batch_size=64
+):
+    
+    print(f"\n🔍 Loading data for client folder: {client_folder}")
+    
+    # Step 1: Load and preprocess
+    windows, labels = load_and_preprocess_data(
+        folder_path=client_folder,
+        initial_window_size=initial_window_size,
+        W_min=W_min,
+        W_max=W_max,
+        shift=shift
+    )
+    
+    # Step 2: Split into train / finetune / test
+    X_train, y_train, X_finetune, y_finetune, X_test, y_test = split_datasets(
+        windows, labels,
+        train_ratio=train_ratio,
+        finetune_ratio=finetune_ratio,
+        test_ratio=test_ratio
+    )
+    
+    # Step 3: Build dataloaders
+    contrastive_loader, finetune_loader, test_loader = get_dataloaders(
+        X_train, y_train, X_finetune, y_finetune, X_test, y_test,
+        batch_size=batch_size
+    )
+    
+    
+    num_classes = len(np.unique(np.array(labels).astype(int)))
+
+
+    # Return nicely packaged dict
+    return {
+        "contrastive_loader": contrastive_loader,
+        "finetune_loader": finetune_loader,
+        "test_loader": test_loader,
+        "X_train": X_train, "y_train": y_train,
+        "X_finetune": X_finetune, "y_finetune": y_finetune,
+        "X_test": X_test, "y_test": y_test,
+        "num_classes": num_classes
+    }
